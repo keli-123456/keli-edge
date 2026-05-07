@@ -2,13 +2,14 @@ use std::time::Instant;
 
 use crate::config::EdgeConfig;
 use crate::metrics::TrafficRegistry;
-use crate::sidecar::{json_escape, SidecarPlan};
+use crate::sidecar::{json_escape, SidecarApplyReport, SidecarManager, SidecarPlan};
 
 #[derive(Debug)]
 pub struct EdgeState {
     started_at: Instant,
     config: EdgeConfig,
     traffic: TrafficRegistry,
+    sidecars: SidecarManager,
 }
 
 impl EdgeState {
@@ -17,6 +18,7 @@ impl EdgeState {
             started_at: Instant::now(),
             config,
             traffic: TrafficRegistry::default(),
+            sidecars: SidecarManager::default(),
         }
     }
 
@@ -60,7 +62,13 @@ impl EdgeState {
     }
 
     pub fn sidecars_json(&self) -> String {
-        SidecarPlan::from_config(&self.config).to_json()
+        let plan = SidecarPlan::from_config(&self.config);
+        self.sidecars.to_json(&plan)
+    }
+
+    pub fn reload_sidecars(&self) -> SidecarApplyReport {
+        let plan = SidecarPlan::from_config(&self.config);
+        self.sidecars.apply_plan(&plan)
     }
 }
 
@@ -79,5 +87,17 @@ mod tests {
         assert!(json.contains("\"upload_bytes\":100"));
         assert!(json.contains("\"download_bytes\":200"));
         assert!(json.contains("\"tag:user\""));
+    }
+
+    #[test]
+    fn reload_sidecars_applies_disabled_starter_plan() {
+        let state = EdgeState::new(EdgeConfig::starter());
+
+        let report = state.reload_sidecars();
+        let json = state.sidecars_json();
+
+        assert!(report.started.is_empty());
+        assert!(report.failed.is_empty());
+        assert!(json.contains("\"state\":\"disabled\""));
     }
 }

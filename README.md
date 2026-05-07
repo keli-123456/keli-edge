@@ -11,7 +11,7 @@ Current scaffold:
 - Local control API over `127.0.0.1:17990`.
 - Health, sidecar plan, traffic metrics, and reload endpoints.
 - In-memory per-user traffic registry.
-- Sidecar planning for protocols that should not be faked inside Xray, such as Naive and Mieru.
+- Sidecar lifecycle state for protocols that should not be faked inside Xray, such as Naive and Mieru.
 - No external Rust dependencies yet, so the first build stays offline-friendly.
 
 Out of scope for this first cut:
@@ -53,6 +53,8 @@ POST /reload
 ```text
 user=user-tag&upload=123&download=456
 ```
+
+`GET /sidecars` reports each sidecar as `disabled`, `stopped`, `running`, or `failed`. `POST /reload` applies the current sidecar plan: disabled entries are never started, and enabled entries must start a real external binary or they are reported as `failed`.
 
 ## Build
 

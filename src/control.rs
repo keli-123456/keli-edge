@@ -48,7 +48,7 @@ impl ControlServer {
             ("GET", "/health") => HttpResponse::ok(self.state.health_json()),
             ("GET", "/metrics") => HttpResponse::ok(self.state.metrics_json()),
             ("GET", "/sidecars") => HttpResponse::ok(self.state.sidecars_json()),
-            ("POST", "/reload") => HttpResponse::accepted("{\"accepted\":true}".to_string()),
+            ("POST", "/reload") => HttpResponse::accepted(self.state.reload_sidecars().to_json()),
             ("POST", "/traffic") => self.record_traffic(body),
             _ => HttpResponse::not_found(),
         }
@@ -203,6 +203,17 @@ mod tests {
         assert_eq!(response.status, 200);
         assert!(state.metrics_json().contains("\"upload_bytes\":9"));
         assert!(state.metrics_json().contains("\"download_bytes\":11"));
+    }
+
+    #[test]
+    fn reload_endpoint_applies_sidecar_plan() {
+        let server = ControlServer::new(Arc::new(EdgeState::new(EdgeConfig::starter())));
+
+        let response = server.handle_request("POST /reload HTTP/1.1\r\ncontent-length: 0\r\n\r\n");
+
+        assert_eq!(response.status, 202);
+        assert!(response.body.contains("\"started\":[]"));
+        assert!(response.body.contains("\"failed\":[]"));
     }
 
     #[test]

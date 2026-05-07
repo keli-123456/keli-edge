@@ -13,7 +13,7 @@ Some protocols are not good fits for direct Xray-style inbound support.
 ## First Milestones
 
 1. Stable local API contract with `kelinode`.
-2. Sidecar lifecycle model: plan, start, reload, stop, health.
+2. Sidecar lifecycle model: plan, start, reload, stop, status.
 3. Traffic accounting interface.
 4. Naive sidecar integration through Caddy forwardproxy.
 5. Mieru sidecar integration through `mita` or a compatible listener.
@@ -26,3 +26,14 @@ Some protocols are not good fits for direct Xray-style inbound support.
 - Do not require GPL code to be linked into this binary.
 - Prefer localhost-only control surfaces.
 - Keep protocol-specific sidecar config generated from panel data, not hand-maintained files.
+
+## Sidecar Lifecycle
+
+The sidecar manager treats the panel-derived plan as the source of truth.
+
+- `disabled`: configured in the plan but intentionally not started.
+- `stopped`: enabled in the plan but not currently running.
+- `running`: the external process was started and has a PID.
+- `failed`: the external process could not be started or inspected.
+
+This keeps Naive and Mieru honest: a protocol is not reported as active unless a real sidecar process is running. Missing binaries, bad paths, and invalid generated configs should surface through `/sidecars` instead of becoming silent node failures.
