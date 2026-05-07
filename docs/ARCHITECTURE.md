@@ -14,10 +14,11 @@ Some protocols are not good fits for direct Xray-style inbound support.
 
 1. Stable local API contract with `kelinode`.
 2. Sidecar lifecycle model: plan, start, reload, stop, status.
-3. Traffic accounting interface.
-4. Naive sidecar integration through Caddy forwardproxy.
-5. Mieru sidecar integration through `mita` or a compatible listener.
-6. Optional Rust-native fast paths for simple protocols after metrics and lifecycle are stable.
+3. Generated sidecar config files.
+4. Traffic accounting interface.
+5. Naive sidecar integration through Caddy forwardproxy.
+6. Mieru sidecar integration through `mita` or a compatible listener.
+7. Optional Rust-native fast paths for simple protocols after metrics and lifecycle are stable.
 
 ## Compatibility Rules
 
@@ -37,3 +38,12 @@ The sidecar manager treats the panel-derived plan as the source of truth.
 - `failed`: the external process could not be started or inspected.
 
 This keeps Naive and Mieru honest: a protocol is not reported as active unless a real sidecar process is running. Missing binaries, bad paths, and invalid generated configs should surface through `/sidecars` instead of becoming silent node failures.
+
+## Config Generation
+
+`keli-edge` can render protocol-specific files before starting a sidecar:
+
+- Naive: Caddyfile using the Caddy `forward_proxy` plugin with `basic_auth`, `hide_ip`, `hide_via`, and optional `probe_resistance`.
+- Mieru: `mita` JSON server config, typically passed through `MITA_CONFIG_JSON_FILE`, with one port or port range, transport, users, logging level, and MTU.
+
+Generated file paths are intentionally constrained to relative paths without `..` or Windows drive prefixes. The goal is for `kelinode` to pass panel-derived values into this renderer later, without allowing remote panel data to write arbitrary host files.

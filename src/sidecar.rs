@@ -1,8 +1,12 @@
 use std::collections::{HashMap, HashSet};
+use std::fs;
+use std::path::{Component, Path};
 use std::process::{Child, Command};
 use std::sync::{Mutex, RwLock};
 
 use crate::config::{EdgeConfig, SidecarConfig};
+use crate::json::json_escape;
+use crate::render::GeneratedFile;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SidecarPlan {
@@ -49,7 +53,7 @@ pub struct SidecarManager {
 
 #[derive(Debug)]
 struct RunningSidecar {
-    command: String,
+    fingerprint: String,
     child: Child,
 }
 
@@ -117,9 +121,11 @@ impl SidecarManager {
             }
 
             let existing_action = if let Some(running) = processes.get_mut(&spec.name) {
-                let command = SidecarPlan::command_preview(spec);
+                let fingerprint = sidecar_fingerprint(spec);
                 match running.child.try_wait() {
-                    Ok(None) if running.command == command => ExistingSidecarAction::KeepRunning(running.child.id()),
+                    Ok(None) if running.fingerprint == fingerprint => {
+                        ExistingSidecarAction::KeepRunning(running.child.id())
+                    }
                     Ok(None) | Ok(Some(_)) => ExistingSidecarAction::Restart,
                     Err(err) => {
                         ExistingSidecarAction::Failed(format!("inspect process failed: {err}"))
@@ -150,6 +156,15 @@ impl SidecarManager {
                     continue;
                 }
                 ExistingSidecarAction::Missing => {}
+            }
+
+            if let Err(error) = write_generated_files(&spec.generated_files) {
+                report.failed.push(SidecarFailure {
+                    name: spec.name.clone(),
+                    error: error.clone(),
+                });
+                statuses.insert(spec.name.clone(), SidecarStatus::failed(spec, error));
+                continue;
             }
 
             match spawn_sidecar(spec) {
@@ -288,9 +303,60 @@ fn spawn_sidecar(spec: &SidecarConfig) -> Result<RunningSidecar, String> {
         .map_err(|err| format!("spawn {} failed: {err}", spec.name))?;
 
     Ok(RunningSidecar {
-        command: SidecarPlan::command_preview(spec),
+        fingerprint: sidecar_fingerprint(spec),
         child,
     })
+}
+
+fn sidecar_fingerprint(spec: &SidecarConfig) -> String {
+    let mut fingerprint = SidecarPlan::command_preview(spec);
+    for (key, value) in &spec.env {
+        fingerprint.push('\n');
+        fingerprint.push_str(key);
+        fingerprint.push('=');
+        fingerprint.push_str(value);
+    }
+    for file in &spec.generated_files {
+        fingerprint.push('\n');
+        fingerprint.push_str(&file.path);
+        fingerprint.push('\0');
+        fingerprint.push_str(&file.contents);
+    }
+    fingerprint
+}
+
+fn write_generated_files(files: &[GeneratedFile]) -> Result<(), String> {
+    for file in files {
+        let path = safe_generated_path(&file.path)?;
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)
+                    .map_err(|err| format!("create {} failed: {err}", parent.display()))?;
+            }
+        }
+        fs::write(&path, &file.contents)
+            .map_err(|err| format!("write {} failed: {err}", path.display()))?;
+    }
+
+    Ok(())
+}
+
+fn safe_generated_path(path: &str) -> Result<&Path, String> {
+    let path = Path::new(path);
+    if path.as_os_str().is_empty() {
+        return Err("generated file path is empty".to_string());
+    }
+    if path.is_absolute() {
+        return Err(format!("generated file path must be relative: {}", path.display()));
+    }
+    if path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir | Component::Prefix(_)))
+    {
+        return Err(format!("generated file path is not safe: {}", path.display()));
+    }
+
+    Ok(path)
 }
 
 fn stop_child(child: &mut Child) {
@@ -339,26 +405,12 @@ fn json_string_array(values: &[String]) -> String {
     format!("[{}]", values)
 }
 
-pub fn json_escape(value: &str) -> String {
-    let mut output = String::with_capacity(value.len());
-    for character in value.chars() {
-        match character {
-            '"' => output.push_str("\\\""),
-            '\\' => output.push_str("\\\\"),
-            '\n' => output.push_str("\\n"),
-            '\r' => output.push_str("\\r"),
-            '\t' => output.push_str("\\t"),
-            _ => output.push(character),
-        }
-    }
-    output
-}
-
 #[cfg(test)]
 mod tests {
     use super::{SidecarManager, SidecarPlan};
     use crate::config::{EdgeConfig, SidecarConfig};
     use crate::protocol::Protocol;
+    use crate::render::generated_file;
 
     #[test]
     fn renders_sidecar_plan_json() {
@@ -396,6 +448,7 @@ mod tests {
                 binary: "keli-edge-missing-binary-for-test".to_string(),
                 args: Vec::new(),
                 env: Vec::new(),
+                generated_files: Vec::new(),
             }],
             ..EdgeConfig::starter()
         };
@@ -409,5 +462,30 @@ mod tests {
         assert_eq!(report.failed.len(), 1);
         assert!(json.contains("\"state\":\"failed\""));
         assert!(json.contains("missing-naive"));
+    }
+
+    #[test]
+    fn manager_reports_unsafe_generated_file_paths_before_spawning() {
+        let config = EdgeConfig {
+            sidecars: vec![SidecarConfig {
+                name: "unsafe-naive".to_string(),
+                protocol: Protocol::Naive,
+                enabled: true,
+                binary: "keli-edge-missing-binary-for-test".to_string(),
+                args: Vec::new(),
+                env: Vec::new(),
+                generated_files: vec![generated_file("../outside", "bad")],
+            }],
+            ..EdgeConfig::starter()
+        };
+        let plan = SidecarPlan::from_config(&config);
+        let manager = SidecarManager::default();
+
+        let report = manager.apply_plan(&plan);
+        let json = manager.to_json(&plan);
+
+        assert_eq!(report.failed.len(), 1);
+        assert!(report.failed[0].error.contains("not safe"));
+        assert!(json.contains("\"state\":\"failed\""));
     }
 }

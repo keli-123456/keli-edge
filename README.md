@@ -12,6 +12,7 @@ Current scaffold:
 - Health, sidecar plan, traffic metrics, and reload endpoints.
 - In-memory per-user traffic registry.
 - Sidecar lifecycle state for protocols that should not be faked inside Xray, such as Naive and Mieru.
+- Generated sidecar config files for Naive/Caddy and Mieru/mita.
 - No external Rust dependencies yet, so the first build stays offline-friendly.
 
 Out of scope for this first cut:
@@ -55,6 +56,8 @@ user=user-tag&upload=123&download=456
 ```
 
 `GET /sidecars` reports each sidecar as `disabled`, `stopped`, `running`, or `failed`. `POST /reload` applies the current sidecar plan: disabled entries are never started, and enabled entries must start a real external binary or they are reported as `failed`.
+
+Before an enabled sidecar is started, `keli-edge` writes its generated config files. Generated paths must be relative and cannot escape the working directory.
 
 ## Build
 

@@ -1,8 +1,9 @@
 use std::time::Instant;
 
 use crate::config::EdgeConfig;
+use crate::json::json_escape;
 use crate::metrics::TrafficRegistry;
-use crate::sidecar::{json_escape, SidecarApplyReport, SidecarManager, SidecarPlan};
+use crate::sidecar::{SidecarApplyReport, SidecarManager, SidecarPlan};
 
 #[derive(Debug)]
 pub struct EdgeState {

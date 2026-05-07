@@ -1,4 +1,5 @@
 use crate::protocol::Protocol;
+use crate::render::GeneratedFile;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EdgeConfig {
@@ -20,6 +21,7 @@ pub struct SidecarConfig {
     pub binary: String,
     pub args: Vec<String>,
     pub env: Vec<(String, String)>,
+    pub generated_files: Vec<GeneratedFile>,
 }
 
 impl EdgeConfig {
@@ -35,14 +37,19 @@ impl EdgeConfig {
                     binary: "caddy".to_string(),
                     args: vec!["run".to_string(), "--config".to_string(), "runtime/naive/Caddyfile".to_string()],
                     env: Vec::new(),
+                    generated_files: Vec::new(),
                 },
                 SidecarConfig {
                     name: "mieru-mita".to_string(),
                     protocol: Protocol::Mieru,
                     enabled: false,
                     binary: "mita".to_string(),
-                    args: vec!["run".to_string(), "--config".to_string(), "runtime/mieru/server.conf".to_string()],
-                    env: Vec::new(),
+                    args: vec!["run".to_string()],
+                    env: vec![(
+                        "MITA_CONFIG_JSON_FILE".to_string(),
+                        "runtime/mieru/server.conf.json".to_string(),
+                    )],
+                    generated_files: Vec::new(),
                 },
             ],
         }
