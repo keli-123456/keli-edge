@@ -62,3 +62,14 @@ cargo build --release
 ```
 
 This Windows workspace currently does not have `cargo` installed, so validation should run on a Rust-enabled Linux/CI machine.
+
+## Kelinode Config
+
+`kelinode` can connect to this process through a local edge block:
+
+```yaml
+edge:
+  enabled: true
+  url: "http://127.0.0.1:17990"
+  timeout: 2
+```

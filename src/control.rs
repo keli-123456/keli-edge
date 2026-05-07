@@ -128,14 +128,55 @@ fn parse_form(body: &str) -> HashMap<String, String> {
     body.split('&')
         .filter_map(|pair| {
             let (key, value) = pair.split_once('=')?;
-            Some((key.trim().to_string(), value.trim().to_string()))
+            Some((decode_form_component(key.trim()), decode_form_component(value.trim())))
         })
         .collect()
 }
 
+fn decode_form_component(value: &str) -> String {
+    let mut output = Vec::with_capacity(value.len());
+    let bytes = value.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'+' => {
+                output.push(b' ');
+                index += 1;
+            }
+            b'%' if index + 2 < bytes.len() => {
+                if let Some(decoded) = decode_hex_byte(bytes[index + 1], bytes[index + 2]) {
+                    output.push(decoded);
+                    index += 3;
+                } else {
+                    output.push(bytes[index]);
+                    index += 1;
+                }
+            }
+            value => {
+                output.push(value);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&output).into_owned()
+}
+
+fn decode_hex_byte(high: u8, low: u8) -> Option<u8> {
+    Some(hex_value(high)? * 16 + hex_value(low)?)
+}
+
+fn hex_value(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        b'A'..=b'F' => Some(value - b'A' + 10),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::ControlServer;
+    use super::{parse_form, ControlServer};
     use crate::config::EdgeConfig;
     use crate::runtime::EdgeState;
     use std::sync::Arc;
@@ -162,5 +203,13 @@ mod tests {
         assert_eq!(response.status, 200);
         assert!(state.metrics_json().contains("\"upload_bytes\":9"));
         assert!(state.metrics_json().contains("\"download_bytes\":11"));
+    }
+
+    #[test]
+    fn form_parser_decodes_url_encoded_values() {
+        let form = parse_form("user=node%3Auser+one&upload=1");
+
+        assert_eq!(form.get("user").map(String::as_str), Some("node:user one"));
+        assert_eq!(form.get("upload").map(String::as_str), Some("1"));
     }
 }
