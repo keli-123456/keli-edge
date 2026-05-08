@@ -56,6 +56,13 @@ POST /reload
 user=user-tag&upload=123&download=456
 ```
 
+For traffic that should be reported by `kelinode`, use the existing node user
+tag format as the `user` value:
+
+```text
+user=<node-tag>|<user-uuid>
+```
+
 `GET /sidecars` reports each sidecar as `disabled`, `stopped`, `running`, or `failed`. `POST /reload` applies the current sidecar plan: disabled entries are never started, and enabled entries must start a real external binary or they are reported as `failed`.
 
 Before an enabled sidecar is started, `keli-edge` writes its generated config files. Generated paths must be relative and cannot escape the working directory.
