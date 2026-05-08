@@ -49,6 +49,7 @@ impl ControlServer {
             ("GET", "/metrics") => HttpResponse::ok(self.state.metrics_json()),
             ("GET", "/sidecars") => HttpResponse::ok(self.state.sidecars_json()),
             ("POST", "/reload") => HttpResponse::accepted(self.state.reload_sidecars().to_json()),
+            ("POST", "/traffic/drain") => HttpResponse::ok(self.state.drain_metrics_json()),
             ("POST", "/traffic") => self.record_traffic(body),
             _ => HttpResponse::not_found(),
         }
@@ -203,6 +204,21 @@ mod tests {
         assert_eq!(response.status, 200);
         assert!(state.metrics_json().contains("\"upload_bytes\":9"));
         assert!(state.metrics_json().contains("\"download_bytes\":11"));
+    }
+
+    #[test]
+    fn traffic_drain_endpoint_returns_and_clears_user_bytes() {
+        let state = Arc::new(EdgeState::new(EdgeConfig::starter()));
+        state.traffic().record("node:user", 10, 20);
+        let server = ControlServer::new(state.clone());
+
+        let response =
+            server.handle_request("POST /traffic/drain HTTP/1.1\r\ncontent-length: 0\r\n\r\n");
+
+        assert_eq!(response.status, 200);
+        assert!(response.body.contains("\"node:user\""));
+        assert!(response.body.contains("\"upload_bytes\":10"));
+        assert!(state.metrics_json().contains("\"upload_bytes\":0"));
     }
 
     #[test]

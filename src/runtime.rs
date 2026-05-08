@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use crate::config::EdgeConfig;
 use crate::json::json_escape;
-use crate::metrics::TrafficRegistry;
+use crate::metrics::{TrafficRegistry, TrafficSnapshot};
 use crate::sidecar::{SidecarApplyReport, SidecarManager, SidecarPlan};
 
 #[derive(Debug)]
@@ -40,26 +40,11 @@ impl EdgeState {
     }
 
     pub fn metrics_json(&self) -> String {
-        let totals = self.traffic.totals();
-        let users = self
-            .traffic
-            .all()
-            .into_iter()
-            .map(|(user, traffic)| {
-                format!(
-                    "{{\"user\":\"{}\",\"upload_bytes\":{},\"download_bytes\":{}}}",
-                    json_escape(&user),
-                    traffic.upload_bytes,
-                    traffic.download_bytes
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(",");
+        traffic_json(self.traffic.all())
+    }
 
-        format!(
-            "{{\"upload_bytes\":{},\"download_bytes\":{},\"users\":[{}]}}",
-            totals.upload_bytes, totals.download_bytes, users
-        )
+    pub fn drain_metrics_json(&self) -> String {
+        traffic_json(self.traffic.drain_all())
     }
 
     pub fn sidecars_json(&self) -> String {
@@ -71,6 +56,31 @@ impl EdgeState {
         let plan = SidecarPlan::from_config(&self.config);
         self.sidecars.apply_plan(&plan)
     }
+}
+
+fn traffic_json(values: Vec<(String, TrafficSnapshot)>) -> String {
+    let mut totals = TrafficSnapshot::default();
+    let users = values
+        .into_iter()
+        .map(|(user, traffic)| {
+            totals.upload_bytes = totals.upload_bytes.saturating_add(traffic.upload_bytes);
+            totals.download_bytes = totals
+                .download_bytes
+                .saturating_add(traffic.download_bytes);
+            format!(
+                "{{\"user\":\"{}\",\"upload_bytes\":{},\"download_bytes\":{}}}",
+                json_escape(&user),
+                traffic.upload_bytes,
+                traffic.download_bytes
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+
+    format!(
+        "{{\"upload_bytes\":{},\"download_bytes\":{},\"users\":[{}]}}",
+        totals.upload_bytes, totals.download_bytes, users
+    )
 }
 
 #[cfg(test)]
@@ -100,5 +110,19 @@ mod tests {
         assert!(report.started.is_empty());
         assert!(report.failed.is_empty());
         assert!(json.contains("\"state\":\"disabled\""));
+    }
+
+    #[test]
+    fn drains_metrics_json_once() {
+        let state = EdgeState::new(EdgeConfig::starter());
+        state.traffic().record("tag:user", 100, 200);
+
+        let drained = state.drain_metrics_json();
+        let after = state.metrics_json();
+
+        assert!(drained.contains("\"upload_bytes\":100"));
+        assert!(drained.contains("\"tag:user\""));
+        assert!(after.contains("\"upload_bytes\":0"));
+        assert!(!after.contains("\"tag:user\""));
     }
 }

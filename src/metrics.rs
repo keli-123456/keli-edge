@@ -52,6 +52,13 @@ impl TrafficRegistry {
         values
     }
 
+    pub fn drain_all(&self) -> Vec<(String, TrafficSnapshot)> {
+        let mut counters = self.counters.write().expect("traffic registry lock poisoned");
+        let mut values = counters.drain().collect::<Vec<_>>();
+        values.sort_by(|left, right| left.0.cmp(&right.0));
+        values
+    }
+
     pub fn totals(&self) -> TrafficSnapshot {
         self.all().into_iter().fold(TrafficSnapshot::default(), |mut total, (_, traffic)| {
             total.upload_bytes = total.upload_bytes.saturating_add(traffic.upload_bytes);
@@ -95,6 +102,37 @@ mod tests {
 
         registry.record("", 10, 10);
 
+        assert!(registry.all().is_empty());
+    }
+
+    #[test]
+    fn drains_all_user_traffic_once() {
+        let registry = TrafficRegistry::default();
+
+        registry.record("user-b", 1, 2);
+        registry.record("user-a", 3, 4);
+
+        let drained = registry.drain_all();
+
+        assert_eq!(
+            drained,
+            vec![
+                (
+                    "user-a".to_string(),
+                    TrafficSnapshot {
+                        upload_bytes: 3,
+                        download_bytes: 4,
+                    },
+                ),
+                (
+                    "user-b".to_string(),
+                    TrafficSnapshot {
+                        upload_bytes: 1,
+                        download_bytes: 2,
+                    },
+                ),
+            ]
+        );
         assert!(registry.all().is_empty());
     }
 }

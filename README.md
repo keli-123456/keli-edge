@@ -46,6 +46,7 @@ GET  /health
 GET  /metrics
 GET  /sidecars
 POST /traffic
+POST /traffic/drain
 POST /reload
 ```
 
@@ -58,6 +59,8 @@ user=user-tag&upload=123&download=456
 `GET /sidecars` reports each sidecar as `disabled`, `stopped`, `running`, or `failed`. `POST /reload` applies the current sidecar plan: disabled entries are never started, and enabled entries must start a real external binary or they are reported as `failed`.
 
 Before an enabled sidecar is started, `keli-edge` writes its generated config files. Generated paths must be relative and cannot escape the working directory.
+
+`POST /traffic/drain` returns the same shape as `GET /metrics` and atomically clears the in-memory counters after taking the snapshot.
 
 ## Build
 
