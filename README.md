@@ -45,6 +45,7 @@ keli-edge (Rust data-plane / sidecar supervisor)
 GET  /health
 GET  /metrics
 GET  /sidecars
+POST /sidecars/upsert
 POST /traffic
 POST /traffic/drain
 POST /reload
@@ -68,6 +69,11 @@ user=<node-tag>|<user-uuid>
 Before an enabled sidecar is started, `keli-edge` writes its generated config files. Generated paths must be relative and cannot escape the working directory.
 
 `POST /traffic/drain` returns the same shape as `GET /metrics` and atomically clears the in-memory counters after taking the snapshot.
+
+`POST /sidecars/upsert` accepts form fields for one sidecar and immediately
+applies the updated plan. Supported fields are `name`, `protocol`, `enabled`,
+`binary`, newline-separated `args`, newline-separated `env` as `KEY=VALUE`, and
+optional generated file fields `file_path` / `file_contents`.
 
 ## Build
 

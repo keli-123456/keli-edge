@@ -1,6 +1,7 @@
+use std::sync::RwLock;
 use std::time::Instant;
 
-use crate::config::EdgeConfig;
+use crate::config::{EdgeConfig, SidecarConfig};
 use crate::json::json_escape;
 use crate::metrics::{TrafficRegistry, TrafficSnapshot};
 use crate::sidecar::{SidecarApplyReport, SidecarManager, SidecarPlan};
@@ -8,7 +9,7 @@ use crate::sidecar::{SidecarApplyReport, SidecarManager, SidecarPlan};
 #[derive(Debug)]
 pub struct EdgeState {
     started_at: Instant,
-    config: EdgeConfig,
+    config: RwLock<EdgeConfig>,
     traffic: TrafficRegistry,
     sidecars: SidecarManager,
 }
@@ -17,14 +18,19 @@ impl EdgeState {
     pub fn new(config: EdgeConfig) -> Self {
         Self {
             started_at: Instant::now(),
-            config,
+            config: RwLock::new(config),
             traffic: TrafficRegistry::default(),
             sidecars: SidecarManager::default(),
         }
     }
 
-    pub fn config(&self) -> &EdgeConfig {
-        &self.config
+    pub fn control_listen_addr(&self) -> String {
+        self.config
+            .read()
+            .expect("edge config lock poisoned")
+            .control
+            .listen_addr
+            .clone()
     }
 
     pub fn traffic(&self) -> &TrafficRegistry {
@@ -48,12 +54,31 @@ impl EdgeState {
     }
 
     pub fn sidecars_json(&self) -> String {
-        let plan = SidecarPlan::from_config(&self.config);
+        let config = self.config.read().expect("edge config lock poisoned");
+        let plan = SidecarPlan::from_config(&config);
         self.sidecars.to_json(&plan)
     }
 
     pub fn reload_sidecars(&self) -> SidecarApplyReport {
-        let plan = SidecarPlan::from_config(&self.config);
+        let config = self.config.read().expect("edge config lock poisoned");
+        let plan = SidecarPlan::from_config(&config);
+        self.sidecars.apply_plan(&plan)
+    }
+
+    pub fn upsert_sidecar(&self, sidecar: SidecarConfig) -> SidecarApplyReport {
+        let plan = {
+            let mut config = self.config.write().expect("edge config lock poisoned");
+            if let Some(existing) = config
+                .sidecars
+                .iter_mut()
+                .find(|existing| existing.name == sidecar.name)
+            {
+                *existing = sidecar;
+            } else {
+                config.sidecars.push(sidecar);
+            }
+            SidecarPlan::from_config(&config)
+        };
         self.sidecars.apply_plan(&plan)
     }
 }

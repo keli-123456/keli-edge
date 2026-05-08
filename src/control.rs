@@ -1,9 +1,13 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::str::FromStr;
 use std::sync::Arc;
 use std::thread;
 
+use crate::config::SidecarConfig;
+use crate::protocol::Protocol;
+use crate::render::generated_file;
 use crate::runtime::EdgeState;
 
 #[derive(Clone)]
@@ -24,7 +28,7 @@ impl ControlServer {
     }
 
     pub fn serve(&self) -> std::io::Result<()> {
-        let listener = TcpListener::bind(&self.state.config().control.listen_addr)?;
+        let listener = TcpListener::bind(self.state.control_listen_addr())?;
         for stream in listener.incoming() {
             let stream = stream?;
             let server = self.clone();
@@ -49,6 +53,7 @@ impl ControlServer {
             ("GET", "/metrics") => HttpResponse::ok(self.state.metrics_json()),
             ("GET", "/sidecars") => HttpResponse::ok(self.state.sidecars_json()),
             ("POST", "/reload") => HttpResponse::accepted(self.state.reload_sidecars().to_json()),
+            ("POST", "/sidecars/upsert") => self.upsert_sidecar(body),
             ("POST", "/traffic/drain") => HttpResponse::ok(self.state.drain_metrics_json()),
             ("POST", "/traffic") => self.record_traffic(body),
             _ => HttpResponse::not_found(),
@@ -72,6 +77,45 @@ impl ControlServer {
         HttpResponse::ok("{\"recorded\":true}".to_string())
     }
 
+    fn upsert_sidecar(&self, body: &str) -> HttpResponse {
+        let form = parse_form(body);
+        let name = form.get("name").cloned().unwrap_or_default();
+        let protocol = match form.get("protocol").map(String::as_str) {
+            Some(value) => match Protocol::from_str(value) {
+                Ok(protocol) => protocol,
+                Err(error) => {
+                    return HttpResponse::bad_request(format!(
+                        "{{\"error\":\"{}\"}}",
+                        crate::json::json_escape(&error)
+                    ))
+                }
+            },
+            None => {
+                return HttpResponse::bad_request(
+                    "{\"error\":\"protocol is required\"}".to_string(),
+                );
+            }
+        };
+        let binary = form.get("binary").cloned().unwrap_or_default();
+        if name.trim().is_empty() {
+            return HttpResponse::bad_request("{\"error\":\"name is required\"}".to_string());
+        }
+        if binary.trim().is_empty() {
+            return HttpResponse::bad_request("{\"error\":\"binary is required\"}".to_string());
+        }
+
+        let sidecar = SidecarConfig {
+            name: name.trim().to_string(),
+            protocol,
+            enabled: form_bool(&form, "enabled"),
+            binary: binary.trim().to_string(),
+            args: form_lines(&form, "args"),
+            env: form_key_value_lines(&form, "env"),
+            generated_files: form_generated_files(&form),
+        };
+        HttpResponse::accepted(self.state.upsert_sidecar(sidecar).to_json())
+    }
+
     fn handle_stream(&self, mut stream: TcpStream) -> std::io::Result<()> {
         let mut buffer = [0_u8; 8192];
         let read = stream.read(&mut buffer)?;
@@ -79,6 +123,72 @@ impl ControlServer {
         let response = self.handle_request(&request);
         stream.write_all(response.to_http().as_bytes())
     }
+}
+
+fn form_bool(form: &HashMap<String, String>, key: &str) -> bool {
+    let Some(value) = form.get(key) else {
+        return false;
+    };
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on" | "enabled"
+    )
+}
+
+fn form_lines(form: &HashMap<String, String>, key: &str) -> Vec<String> {
+    form.get(key)
+        .map(|value| {
+            value
+                .lines()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn form_key_value_lines(form: &HashMap<String, String>, key: &str) -> Vec<(String, String)> {
+    form.get(key)
+        .map(|value| {
+            value
+                .lines()
+                .filter_map(|line| {
+                    let (key, value) = line.split_once('=')?;
+                    let key = key.trim();
+                    if key.is_empty() {
+                        return None;
+                    }
+                    Some((key.to_string(), value.trim().to_string()))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn form_generated_files(form: &HashMap<String, String>) -> Vec<crate::render::GeneratedFile> {
+    let mut files = Vec::new();
+    for index in 0.. {
+        let path_key = if index == 0 {
+            "file_path".to_string()
+        } else {
+            format!("file_path_{index}")
+        };
+        let contents_key = if index == 0 {
+            "file_contents".to_string()
+        } else {
+            format!("file_contents_{index}")
+        };
+        let Some(path) = form.get(&path_key) else {
+            break;
+        };
+        if path.trim().is_empty() {
+            continue;
+        }
+        let contents = form.get(&contents_key).cloned().unwrap_or_default();
+        files.push(generated_file(path.trim(), contents));
+    }
+    files
 }
 
 impl HttpResponse {
@@ -230,6 +340,23 @@ mod tests {
         assert_eq!(response.status, 202);
         assert!(response.body.contains("\"started\":[]"));
         assert!(response.body.contains("\"failed\":[]"));
+    }
+
+    #[test]
+    fn sidecar_upsert_endpoint_updates_plan_and_applies_it() {
+        let state = Arc::new(EdgeState::new(EdgeConfig::starter()));
+        let server = ControlServer::new(state.clone());
+
+        let response = server.handle_request(concat!(
+            "POST /sidecars/upsert HTTP/1.1\r\ncontent-length: 120\r\n\r\n",
+            "name=mieru-mita&protocol=mieru&enabled=false&binary=mita",
+            "&args=run&env=MITA_CONFIG_JSON_FILE%3Druntime%2Fmieru.json"
+        ));
+
+        assert_eq!(response.status, 202);
+        let json = state.sidecars_json();
+        assert!(json.contains("\"mieru-mita\""));
+        assert!(json.contains("\"command\":\"mita run\""));
     }
 
     #[test]
